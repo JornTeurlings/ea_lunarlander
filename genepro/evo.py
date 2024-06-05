@@ -9,9 +9,15 @@ import time, inspect
 from copy import deepcopy
 from joblib.parallel import Parallel, delayed
 
+import torch
+import torch.optim as optim
+
 from genepro.node import Node
 from genepro.variation import *
 from genepro.selection import tournament_selection
+
+from collections import namedtuple
+import copy
 
 class Evolution:
   """
@@ -190,8 +196,14 @@ class Evolution:
     Performs one generation, which consists of parent selection, offspring generation, and fitness evaluation
     """
     # select promising parents
+    if self.verbose:
+      print("start gen")
     sel_fun = self.selection["fun"]
+
     parents = sel_fun(self.population, self.pop_size, **self.selection["kwargs"])
+    #print(f'before{parents[0].get_subtrees_consts()}')
+    parents = [self._optimize(parent, 32, 0.99, 10, 0.1) for parent in parents]
+    #print(f'after{parents[0].get_subtrees_consts()}')
     # generate offspring
     offspring_population = Parallel(n_jobs=self.n_jobs)(delayed(generate_offspring)
       (t, self.crossovers, self.mutations, self.coeff_opts, 
@@ -222,6 +234,47 @@ class Evolution:
     best = self.population[np.argmax([t.fitness for t in self.population])]
     self.best_of_gens.append(deepcopy(best))
 
+  def _optimize(self, individual, batch_size, GAMMA, steps, lr):
+    Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
+
+    constants = individual.get_subtrees_consts()
+    if len(constants)>0:
+        optimizer = optim.AdamW(constants, lr=lr, amsgrad=True)
+
+    for _ in range(steps):
+
+        if len(constants)>0 and len(self.memory)>batch_size:
+            target_tree = copy.deepcopy(individual)
+
+            transitions = self.memory.sample(batch_size)
+            batch = Transition(*zip(*transitions))
+            
+            non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
+                                                batch.next_state)), dtype=torch.bool)
+
+            non_final_next_states = torch.cat([s for s in batch.next_state
+                                                    if s is not None])
+            state_batch = torch.cat(batch.state)
+            action_batch = torch.cat(batch.action)
+            reward_batch = torch.cat(batch.reward)
+
+            state_action_values = individual.get_output_pt(state_batch).gather(1, action_batch)
+            next_state_values = torch.zeros(batch_size, dtype=torch.float)
+            with torch.no_grad():
+                next_state_values[non_final_mask] = target_tree.get_output_pt(non_final_next_states).max(1)[0].float()
+
+            expected_state_action_values = (next_state_values * GAMMA) + reward_batch
+            
+            criterion = torch.nn.SmoothL1Loss()
+            loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+        
+            # Optimize the model
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_value_(constants, 100)
+            optimizer.step()
+    return individual
+
   def evolve(self):
     """
     Runs the evolution until a termination criterion is met;
@@ -231,7 +284,7 @@ class Evolution:
     """
     # set the start time
     self.start_time = time.time()
-
+    self.optimize_count = 0
     self._initialize_population()
 
     # generational loop
