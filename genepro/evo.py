@@ -195,22 +195,45 @@ class Evolution:
     """
     Performs one generation, which consists of parent selection, offspring generation, and fitness evaluation
     """
+    # mutate every individual
+    self.population = [self._optimize(ind, 32, 0.99, 10, 0.1) for ind in self.population]
+
+    # mutate sampled individuals
+    # sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
+    # sampled_individuals = [self._optimize(self.population[ind], 32, 0.99, 40, 0.05) for ind in sample_idxs]
+    # for (idx, ind) in zip(sample_idxs, sampled_individuals):
+    #   self.population[idx] = ind
+
     # select promising parents
-    if self.verbose:
-      print("start gen")
     sel_fun = self.selection["fun"]
 
     parents = sel_fun(self.population, self.pop_size, **self.selection["kwargs"])
-    #print(f'before{parents[0].get_subtrees_consts()}')
-    parents = [self._optimize(parent, 32, 0.99, 10, 0.1) for parent in parents]
-    #print(f'after{parents[0].get_subtrees_consts()}')
+
+    #mutate parents
+    # parents = [self._optimize(parent, 32, 0.99, 10, 0.1) for parent in parents]
+
+    #mutate a sample of parents
+    # sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
+    # sampled_individuals = [self._optimize(parents[ind], 32, 0.99, 40, 0.05) for ind in sample_idxs]
+    # for (idx, ind) in zip(sample_idxs, sampled_individuals):
+    #   parents[idx] = ind
+
     # generate offspring
     offspring_population = Parallel(n_jobs=self.n_jobs)(delayed(generate_offspring)
       (t, self.crossovers, self.mutations, self.coeff_opts, 
       parents, self.internal_nodes, self.leaf_nodes,
       constraints={"max_tree_size": self.max_tree_size}) 
       for t in parents)
+    
+    #mutate all offspring
+    # offspring_population = [self._optimize(pop, 32, 0.99, 10, 0.1) for pop in offspring_population]
 
+    #mutate sampled offspring
+    # sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
+    # sampled_individuals = [self._optimize(offspring_population[ind], 32, 0.99, 40, 0.05) for ind in sample_idxs]
+    # for (idx, ind) in zip(sample_idxs, sampled_individuals):
+    #   offspring_population[idx] = ind
+    
     # evaluate each offspring and store its fitness 
     fitnesses = Parallel(n_jobs=self.n_jobs)(delayed(self.fitness_function)(t) for t in offspring_population)
     fitnesses = list(map(list, zip(*fitnesses)))
