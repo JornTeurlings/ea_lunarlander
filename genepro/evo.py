@@ -122,10 +122,10 @@ class Evolution:
     max_time : int=None,
     # optimization settings
     optimization_behavior : OptimizationBehavior=OptimizationBehavior.NONE,
-    batch_size : int=32,
+    batch_size : int=64,
     GAMMA : float=0.99,
     steps : int=10,
-    lr : float=0.1,
+    lr : float=0.05,
     # other
     n_jobs : int=4,
     verbose : bool=False,
@@ -213,12 +213,12 @@ class Evolution:
     """
     # mutate every individual
     if self.optimization_behavior == OptimizationBehavior.ALL_INDIVIDUALS:
-      self.population = [self._optimize(ind) for ind in self.population]
+      self.population = [self._optimize(ind, self.steps) for ind in self.population]
 
     # mutate sampled individuals
     if self.optimization_behavior == OptimizationBehavior.SAMPLED_INDIVIDUALS:
       sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
-      sampled_individuals = [self._optimize(self.population[ind]) for ind in sample_idxs]
+      sampled_individuals = [self._optimize(self.population[ind], self.steps*4) for ind in sample_idxs]
       for (idx, ind) in zip(sample_idxs, sampled_individuals):
         self.population[idx] = ind
 
@@ -229,12 +229,12 @@ class Evolution:
 
     #mutate parents
     if self.optimization_behavior == OptimizationBehavior.ALL_PARENTS:
-      parents = [self._optimize(parent) for parent in parents]
+      parents = [self._optimize(parent, self.steps) for parent in parents]
 
     #mutate a sample of parents
     if self.optimization_behavior == OptimizationBehavior.SAMPLED_PARENTS:
       sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
-      sampled_individuals = [self._optimize(parents[ind]) for ind in sample_idxs]
+      sampled_individuals = [self._optimize(parents[ind], self.steps*4) for ind in sample_idxs]
       for (idx, ind) in zip(sample_idxs, sampled_individuals):
         parents[idx] = ind
 
@@ -247,12 +247,12 @@ class Evolution:
 
     #mutate all offspring
     if self.optimization_behavior == OptimizationBehavior.ALL_OFFSPRING:
-      offspring_population = [self._optimize(pop) for pop in offspring_population]
+      offspring_population = [self._optimize(pop, self.steps) for pop in offspring_population]
 
     #mutate sampled offspring
     if self.optimization_behavior == OptimizationBehavior.SAMPLED_OFFSPRING:
       sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
-      sampled_individuals = [self._optimize(offspring_population[ind]) for ind in sample_idxs]
+      sampled_individuals = [self._optimize(offspring_population[ind], self.steps*4) for ind in sample_idxs]
       for (idx, ind) in zip(sample_idxs, sampled_individuals):
         offspring_population[idx] = ind
 
@@ -279,14 +279,14 @@ class Evolution:
     best = self.population[np.argmax([t.fitness for t in self.population])]
     self.best_of_gens.append(deepcopy(best))
 
-  def _optimize(self, individual):
+  def _optimize(self, individual, steps):
     Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
     constants = individual.get_subtrees_consts()
     if len(constants)>0:
         optimizer = optim.AdamW(constants, lr=self.lr, amsgrad=True)
 
-    for _ in range(self.steps):
+    for _ in range(steps):
 
         if len(constants)>0 and len(self.memory)>self.batch_size:
             target_tree = copy.deepcopy(individual)
