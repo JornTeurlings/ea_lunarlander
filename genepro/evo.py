@@ -2,6 +2,7 @@ from typing import Callable
 
 import numpy as np
 from numpy.random import random as randu
+from scipy.spatial import distance
 from numpy.random import randint as randi
 from numpy.random import choice as randc
 from numpy.random import shuffle
@@ -11,10 +12,11 @@ from joblib.parallel import Parallel, delayed
 
 from genepro.node import Node
 from genepro.variation import *
-from genepro.selection import tournament_selection
+from genepro.selection import tournament_selection_with_elitism, compute_all_pairwise_distance
+
 
 class Evolution:
-  """
+    """
   Class concerning the overall evolution process.
 
   Parameters
@@ -86,56 +88,60 @@ class Evolution:
   best_of_gens : list
     list containing the best-found tree in each generation; note that the entry at index 0 is the best at initialization
   """
-  def __init__(self,
-    # required settings
-    fitness_function : Callable[[Node], float],
-    internal_nodes : list,
-    leaf_nodes : list,
-    # optional evolution settings
-    n_trees : int,
-    pop_size : int=256,
-    init_max_depth : int=4,
-    max_tree_size : int=64,
-    crossovers : list=[{"fun":subtree_crossover, "rate": 0.5}],
-    mutations : list= [{"fun":subtree_mutation, "rate": 0.5}],
-    coeff_opts : list = [{"fun":coeff_mutation, "rate": 0.5}],
-    selection : dict={"fun":tournament_selection,"kwargs":{"tournament_size":8}},
-    # termination criteria
-    max_evals : int=None,
-    max_gens : int=100,
-    max_time : int=None,
-    # other
-    n_jobs : int=4,
-    verbose : bool=False,
-    ):
 
-    # set parameters as attributes
-    _, _, _, values = inspect.getargvalues(inspect.currentframe())
-    values.pop('self')
-    for arg, val in values.items():
-      setattr(self, arg, val)
+    def __init__(self,
+                 # required settings
+                 fitness_function: Callable[[Node], float],
+                 internal_nodes: list,
+                 leaf_nodes: list,
+                 # optional evolution settings
+                 n_trees: int,
+                 pop_size: int = 256,
+                 init_max_depth: int = 4,
+                 max_tree_size: int = 64,
+                 crossovers: list = [{"fun": subtree_crossover, "rate": 0.5}],
+                 mutations: list = [{"fun": subtree_mutation, "rate": 0.5}],
+                 coeff_opts: list = [{"fun": coeff_mutation, "rate": 0.5}],
+                 selection: dict = {"fun": tournament_selection_with_elitism, "kwargs": {"tournament_size": 8}},
+                 # termination criteria
+                 max_evals: int = None,
+                 max_gens: int = 100,
+                 max_time: int = None,
+                 # other
+                 n_jobs: int = 4,
+                 verbose: bool = False,
+                 ):
 
-    # fill-in empty kwargs if absent in crossovers, mutations, coeff_opts
-    for variation_list in [crossovers, mutations, coeff_opts]:
-      for i in range(len(variation_list)):
-        if "kwargs" not in variation_list[i]:
-          variation_list[i]["kwargs"] = dict()
-    # same for selection
-    if "kwargs" not in selection:
-      selection["kwargs"] = dict()
+        # set parameters as attributes
+        _, _, _, values = inspect.getargvalues(inspect.currentframe())
+        values.pop('self')
+        for arg, val in values.items():
+            setattr(self, arg, val)
 
-    # initialize some state variables
-    self.population = list()
-    self.num_gens = 0
-    self.num_evals = 0
-    self.start_time, self.elapsed_time = 0, 0
-    self.best_of_gens = list()
+        # fill-in empty kwargs if absent in crossovers, mutations, coeff_opts
+        for variation_list in [crossovers, mutations, coeff_opts]:
+            for i in range(len(variation_list)):
+                if "kwargs" not in variation_list[i]:
+                    variation_list[i]["kwargs"] = dict()
+        # same for selection
+        if "kwargs" not in selection:
+            selection["kwargs"] = dict()
 
-    self.memory = None
+        # initialize some state variables
+        self.population = list()
+        self.num_gens = 0
+        self.num_evals = 0
+        self.start_time, self.elapsed_time = 0, 0
+        self.best_of_gens = list()
+        self.best_fitness = list()
+        self.average_of_gens = list()
+        self.diversity_of_fitness = list()
+        self.diversity_of_population = list()
 
+        self.memory = None
 
-  def _must_terminate(self) -> bool:
-    """
+    def _must_terminate(self) -> bool:
+        """
     Determines whether a termination criterion has been reached
 
     Returns
@@ -143,103 +149,122 @@ class Evolution:
     bool
       True if a termination criterion is met, else False
     """
-    self.elapsed_time = time.time() - self.start_time
-    if self.max_time and self.elapsed_time >= self.max_time:
-      return True
-    elif self.max_evals and self.num_evals >= self.max_evals:
-      return True
-    elif self.max_gens and self.num_gens >= self.max_gens:
-      return True
-    return False
+        self.elapsed_time = time.time() - self.start_time
+        if self.max_time and self.elapsed_time >= self.max_time:
+            return True
+        elif self.max_evals and self.num_evals >= self.max_evals:
+            return True
+        elif self.max_gens and self.num_gens >= self.max_gens:
+            return True
+        return False
 
-  def _initialize_population(self):
-    """
+    def _initialize_population(self):
+        """
     Generates a random initial population and evaluates it
     """
-    # initialize the population
-    self.population = Parallel(n_jobs=self.n_jobs)(
-        delayed(generate_random_multitree)(self.n_trees, 
-          self.internal_nodes, self.leaf_nodes, max_depth=self.init_max_depth )
-        for _ in range(self.pop_size))
+        # initialize the population
+        self.population = Parallel(n_jobs=self.n_jobs)(
+            delayed(generate_random_multitree)(self.n_trees,
+                                               self.internal_nodes, self.leaf_nodes, max_depth=self.init_max_depth)
+            for _ in range(self.pop_size))
 
-    for count, individual in enumerate(self.population):
-      individual.get_readable_repr()
+        for count, individual in enumerate(self.population):
+            individual.get_readable_repr()
 
-    # evaluate the trees and store their fitness
-    fitnesses = Parallel(n_jobs=self.n_jobs)(delayed(self.fitness_function)(t) for t in self.population)
-    fitnesses = list(map(list, zip(*fitnesses)))
-    memories = fitnesses[1]
-    memory = memories[0]
-    for m in range(1,len(memories)):
-      memory += memories[m]
+        # evaluate the trees and store their fitness
+        fitnesses = Parallel(n_jobs=self.n_jobs)(delayed(self.fitness_function)(t) for t in self.population)
+        fitnesses = list(map(list, zip(*fitnesses)))
+        memories = fitnesses[1]
+        memory = memories[0]
+        for m in range(1, len(memories)):
+            memory += memories[m]
 
-    self.memory = memory
+        self.memory = memory
 
-    fitnesses = fitnesses[0]
+        fitnesses = fitnesses[0]
 
-    for i in range(self.pop_size):
-      self.population[i].fitness = fitnesses[i]
-    # store eval cost
-    self.num_evals += self.pop_size
-    # store best at initialization
-    best = self.population[np.argmax([t.fitness for t in self.population])]
-    self.best_of_gens.append(deepcopy(best))
+        for i in range(self.pop_size):
+            self.population[i].fitness = fitnesses[i]
+        # store eval cost
+        self.num_evals += self.pop_size
+        # store best at initialization
+        fitness_list = [t.fitness for t in self.population]
+        best = self.population[np.argmax(fitness_list)]
+        self.best_of_gens.append(deepcopy(best))
+        average = np.mean(fitness_list)
+        variation = np.std(fitness_list)
+        diversity_gen = compute_all_pairwise_distance(self.population)
 
-  def _perform_generation(self):
-    """
+        self.diversity_of_population.append(diversity_gen)
+        self.best_of_gens.append(deepcopy(best))
+        self.best_fitness.append(best.fitness)
+        self.average_of_gens.append(average)
+        self.diversity_of_fitness.append(variation)
+
+    def _perform_generation(self):
+        """
     Performs one generation, which consists of parent selection, offspring generation, and fitness evaluation
     """
-    # select promising parents
-    sel_fun = self.selection["fun"]
-    parents = sel_fun(self.population, self.pop_size, **self.selection["kwargs"])
-    # generate offspring
-    offspring_population = Parallel(n_jobs=self.n_jobs)(delayed(generate_offspring)
-      (t, self.crossovers, self.mutations, self.coeff_opts, 
-      parents, self.internal_nodes, self.leaf_nodes,
-      constraints={"max_tree_size": self.max_tree_size}) 
-      for t in parents)
+        # select promising parents
+        sel_fun = self.selection["fun"]
+        parents = sel_fun(self.population, self.pop_size, **self.selection["kwargs"])
+        # generate offspring
+        offspring_population = Parallel(n_jobs=self.n_jobs)(delayed(generate_offspring)
+                                                            (t, self.crossovers, self.mutations, self.coeff_opts,
+                                                             parents, self.internal_nodes, self.leaf_nodes,
+                                                             constraints={"max_tree_size": self.max_tree_size})
+                                                            for t in parents)
 
-    # evaluate each offspring and store its fitness 
-    fitnesses = Parallel(n_jobs=self.n_jobs)(delayed(self.fitness_function)(t) for t in offspring_population)
-    fitnesses = list(map(list, zip(*fitnesses)))
-    memories = fitnesses[1]
-    memory = memories[0]
-    for m in range(1,len(memories)):
-      memory += memories[m]
+        # evaluate each offspring and store its fitness
+        fitnesses = Parallel(n_jobs=self.n_jobs)(delayed(self.fitness_function)(t) for t in offspring_population)
+        fitnesses = list(map(list, zip(*fitnesses)))
+        memories = fitnesses[1]
+        memory = memories[0]
+        for m in range(1, len(memories)):
+            memory += memories[m]
 
-    self.memory = memory + self.memory
+        self.memory = memory + self.memory
 
-    fitnesses = fitnesses[0]
+        fitnesses = fitnesses[0]
 
-    for i in range(self.pop_size):
-      offspring_population[i].fitness = fitnesses[i]
-    # store cost
-    self.num_evals += self.pop_size
-    # update the population for the next iteration
-    self.population = offspring_population
-    # update info
-    self.num_gens += 1
-    best = self.population[np.argmax([t.fitness for t in self.population])]
-    self.best_of_gens.append(deepcopy(best))
+        for i in range(self.pop_size):
+            offspring_population[i].fitness = fitnesses[i]
+        # store cost
+        self.num_evals += self.pop_size
+        # update the population for the next iteration
+        self.population = offspring_population
+        # update info
+        self.num_gens += 1
+        fitness_list = [t.fitness for t in self.population]
+        best = self.population[np.argmax(fitness_list)]
+        average = np.mean(fitness_list)
+        variation = np.std(fitness_list)
+        diversity_gen = compute_all_pairwise_distance(self.population)
 
-  def evolve(self):
-    """
+        self.diversity_of_population.append(diversity_gen)
+        self.best_of_gens.append(deepcopy(best))
+        self.best_fitness.append(best.fitness)
+        self.average_of_gens.append(average)
+        self.diversity_of_fitness.append(variation)
+
+    def evolve(self):
+        """
     Runs the evolution until a termination criterion is met;
     first, a random population is initialized, second the generational loop is started:
     every generation, promising parents are selected, offspring are generated from those parents, 
     and the offspring population is used to form the population for the next generation
     """
-    # set the start time
-    self.start_time = time.time()
+        # set the start time
+        self.start_time = time.time()
 
-    self._initialize_population()
+        self._initialize_population()
 
-    # generational loop
-    while not self._must_terminate():
-      # perform one generation
-      self._perform_generation()
-      # log info
-      if self.verbose:
-        print("gen: {},\tbest of gen fitness: {:.3f},\tbest of gen size: {}".format(
-            self.num_gens, self.best_of_gens[-1].fitness, len(self.best_of_gens[-1])
-            ))
+        # generational loop
+        while not self._must_terminate():
+            # perform one generation
+            self._perform_generation()
+            # log info
+            if self.verbose:
+                print("gen: {},\tbest of gen fitness: {:.3f},\tbest of gen size: {}".format(
+                    self.num_gens, self.best_of_gens[-1].fitness, len(self.best_of_gens[-1])
+                ))
