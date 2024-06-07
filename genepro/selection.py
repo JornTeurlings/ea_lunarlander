@@ -53,11 +53,9 @@ def exponential_ranking_selection_with_elitism(contestants, num_to_select, c, k,
         probs[i] = (c ** (n - i + 1)) * (c - 1) / (c ** n - 1)
 
     # Select individuals using probabilities
-    for _ in range(num_to_select - num_elites):
-        chosen = random.choices(non_elites, probs)[0]
-        selected.append(deepcopy(chosen))
-        non_elites.remove(chosen)
-
+    chosen = random.choices(non_elites, probs, k=num_to_select - num_elites)
+    selected.append(deepcopy(chosen))
+    non_elites.remove(chosen)
     # Add elites directly to the selected pool
     selected.extend(elites)
 
@@ -85,10 +83,9 @@ def linear_ranking_selection_with_elitism(contestants, num_to_select, s, elitism
         probs[i] = (1 / n) * (s - ((2 * s - 2) * i) / (n - 1))
 
     # Select individuals using probabilities
-    for _ in range(num_to_select - num_elites):
-        chosen = random.choices(non_elites, probs)[0]
-        selected.append(deepcopy(chosen))
-        non_elites.remove(chosen)
+    chosen = random.choices(non_elites, probs, k=num_to_select - num_elites)
+    selected.append(deepcopy(chosen))
+    non_elites.remove(chosen)
 
     # Add elites directly to the selected pool
     selected.extend(elites)
