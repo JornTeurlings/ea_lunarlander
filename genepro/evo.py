@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Callable
 
 import numpy as np
@@ -18,6 +19,15 @@ from genepro.selection import tournament_selection
 
 from collections import namedtuple
 import copy
+
+class OptimizationBehavior(Enum):
+  NONE = 0
+  ALL_INDIVIDUALS = 1
+  SAMPLED_INDIVIDUALS = 2
+  ALL_PARENTS = 3
+  SAMPLED_PARENTS = 4
+  ALL_OFFSPRING = 5
+  SAMPLED_OFFSPRING = 6
 
 class Evolution:
   """
@@ -51,7 +61,7 @@ class Evolution:
 
   coeff_opts : list, optional
     similar to `crossovers`, but for coefficient optimization (default is [{"fun":coeff_mutation, "rate": 1.0}])
-  
+
   selection : dict, optional
     dictionary that contains: "fun": function to be used to select promising parents, "kwargs": kwargs for the chosen selection function (default is {"fun":tournament_selection,"kwargs":{"tournament_size":4}})
 
@@ -110,6 +120,12 @@ class Evolution:
     max_evals : int=None,
     max_gens : int=100,
     max_time : int=None,
+    # optimization settings
+    optimization_behavior : OptimizationBehavior=OptimizationBehavior.NONE,
+    batch_size : int=32,
+    GAMMA : float=0.99,
+    steps : int=10,
+    lr : float=0.1,
     # other
     n_jobs : int=4,
     verbose : bool=False,
@@ -164,7 +180,7 @@ class Evolution:
     """
     # initialize the population
     self.population = Parallel(n_jobs=self.n_jobs)(
-        delayed(generate_random_multitree)(self.n_trees, 
+        delayed(generate_random_multitree)(self.n_trees,
           self.internal_nodes, self.leaf_nodes, max_depth=self.init_max_depth )
         for _ in range(self.pop_size))
 
@@ -196,13 +212,15 @@ class Evolution:
     Performs one generation, which consists of parent selection, offspring generation, and fitness evaluation
     """
     # mutate every individual
-    self.population = [self._optimize(ind, 32, 0.99, 10, 0.1) for ind in self.population]
+    if self.optimization_behavior == OptimizationBehavior.ALL_INDIVIDUALS:
+      self.population = [self._optimize(ind) for ind in self.population]
 
     # mutate sampled individuals
-    # sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
-    # sampled_individuals = [self._optimize(self.population[ind], 32, 0.99, 40, 0.05) for ind in sample_idxs]
-    # for (idx, ind) in zip(sample_idxs, sampled_individuals):
-    #   self.population[idx] = ind
+    if self.optimization_behavior == OptimizationBehavior.SAMPLED_INDIVIDUALS:
+      sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
+      sampled_individuals = [self._optimize(self.population[ind]) for ind in sample_idxs]
+      for (idx, ind) in zip(sample_idxs, sampled_individuals):
+        self.population[idx] = ind
 
     # select promising parents
     sel_fun = self.selection["fun"]
@@ -210,31 +228,35 @@ class Evolution:
     parents = sel_fun(self.population, self.pop_size, **self.selection["kwargs"])
 
     #mutate parents
-    # parents = [self._optimize(parent, 32, 0.99, 10, 0.1) for parent in parents]
+    if self.optimization_behavior == OptimizationBehavior.ALL_PARENTS:
+      parents = [self._optimize(parent) for parent in parents]
 
     #mutate a sample of parents
-    # sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
-    # sampled_individuals = [self._optimize(parents[ind], 32, 0.99, 40, 0.05) for ind in sample_idxs]
-    # for (idx, ind) in zip(sample_idxs, sampled_individuals):
-    #   parents[idx] = ind
+    if self.optimization_behavior == OptimizationBehavior.SAMPLED_PARENTS:
+      sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
+      sampled_individuals = [self._optimize(parents[ind]) for ind in sample_idxs]
+      for (idx, ind) in zip(sample_idxs, sampled_individuals):
+        parents[idx] = ind
 
     # generate offspring
     offspring_population = Parallel(n_jobs=self.n_jobs)(delayed(generate_offspring)
-      (t, self.crossovers, self.mutations, self.coeff_opts, 
+      (t, self.crossovers, self.mutations, self.coeff_opts,
       parents, self.internal_nodes, self.leaf_nodes,
-      constraints={"max_tree_size": self.max_tree_size}) 
+      constraints={"max_tree_size": self.max_tree_size})
       for t in parents)
-    
+
     #mutate all offspring
-    # offspring_population = [self._optimize(pop, 32, 0.99, 10, 0.1) for pop in offspring_population]
+    if self.optimization_behavior == OptimizationBehavior.ALL_OFFSPRING:
+      offspring_population = [self._optimize(pop) for pop in offspring_population]
 
     #mutate sampled offspring
-    # sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
-    # sampled_individuals = [self._optimize(offspring_population[ind], 32, 0.99, 40, 0.05) for ind in sample_idxs]
-    # for (idx, ind) in zip(sample_idxs, sampled_individuals):
-    #   offspring_population[idx] = ind
-    
-    # evaluate each offspring and store its fitness 
+    if self.optimization_behavior == OptimizationBehavior.SAMPLED_OFFSPRING:
+      sample_idxs = np.random.choice(np.arange(self.pop_size), self.pop_size//4, replace=False)
+      sampled_individuals = [self._optimize(offspring_population[ind]) for ind in sample_idxs]
+      for (idx, ind) in zip(sample_idxs, sampled_individuals):
+        offspring_population[idx] = ind
+
+    # evaluate each offspring and store its fitness
     fitnesses = Parallel(n_jobs=self.n_jobs)(delayed(self.fitness_function)(t) for t in offspring_population)
     fitnesses = list(map(list, zip(*fitnesses)))
     memories = fitnesses[1]
@@ -257,21 +279,21 @@ class Evolution:
     best = self.population[np.argmax([t.fitness for t in self.population])]
     self.best_of_gens.append(deepcopy(best))
 
-  def _optimize(self, individual, batch_size, GAMMA, steps, lr):
+  def _optimize(self, individual):
     Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
     constants = individual.get_subtrees_consts()
     if len(constants)>0:
-        optimizer = optim.AdamW(constants, lr=lr, amsgrad=True)
+        optimizer = optim.AdamW(constants, lr=self.lr, amsgrad=True)
 
-    for _ in range(steps):
+    for _ in range(self.steps):
 
-        if len(constants)>0 and len(self.memory)>batch_size:
+        if len(constants)>0 and len(self.memory)>self.batch_size:
             target_tree = copy.deepcopy(individual)
 
-            transitions = self.memory.sample(batch_size)
+            transitions = self.memory.sample(self.batch_size)
             batch = Transition(*zip(*transitions))
-            
+
             non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
                                                 batch.next_state)), dtype=torch.bool)
 
@@ -282,15 +304,15 @@ class Evolution:
             reward_batch = torch.cat(batch.reward)
 
             state_action_values = individual.get_output_pt(state_batch).gather(1, action_batch)
-            next_state_values = torch.zeros(batch_size, dtype=torch.float)
+            next_state_values = torch.zeros(self.batch_size, dtype=torch.float)
             with torch.no_grad():
                 next_state_values[non_final_mask] = target_tree.get_output_pt(non_final_next_states).max(1)[0].float()
 
-            expected_state_action_values = (next_state_values * GAMMA) + reward_batch
-            
+            expected_state_action_values = (next_state_values * self.GAMMA) + reward_batch
+
             criterion = torch.nn.SmoothL1Loss()
             loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
-        
+
             # Optimize the model
             optimizer.zero_grad()
             loss.backward()
@@ -302,7 +324,7 @@ class Evolution:
     """
     Runs the evolution until a termination criterion is met;
     first, a random population is initialized, second the generational loop is started:
-    every generation, promising parents are selected, offspring are generated from those parents, 
+    every generation, promising parents are selected, offspring are generated from those parents,
     and the offspring population is used to form the population for the next generation
     """
     # set the start time
