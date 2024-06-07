@@ -62,7 +62,6 @@ def exponential_ranking_selection_with_elitism(contestants, num_to_select, c, k,
     return selected
 
 
-
 def linear_ranking_selection_with_elitism(contestants, num_to_select, s, elitism_rate):
     # Calculate number of elites to keep
     num_elites = int(len(contestants) * elitism_rate)
@@ -91,7 +90,6 @@ def linear_ranking_selection_with_elitism(contestants, num_to_select, s, elitism
     selected.extend(elites)
 
     return selected
-
 
 
 def roulette_wheel_selection(contestants, num_to_select, with_stochastic_acc):
@@ -214,7 +212,6 @@ def tournament_selection_with_elitism(contestants, num_to_select, tournament_siz
     selected.extend(elites)
 
     return selected
-
 
 
 distance_cache = {}
