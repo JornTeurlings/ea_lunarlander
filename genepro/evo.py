@@ -15,7 +15,7 @@ import torch.optim as optim
 
 from genepro.node import Node
 from genepro.variation import *
-from genepro.selection import tournament_selection
+from genepro.selection import tournament_selection_with_elitism, compute_all_pairwise_distance
 
 from collections import namedtuple
 import copy
@@ -115,7 +115,7 @@ class Evolution:
     crossovers : list=[{"fun":subtree_crossover, "rate": 0.5}],
     mutations : list= [{"fun":subtree_mutation, "rate": 0.5}],
     coeff_opts : list = [{"fun":coeff_mutation, "rate": 0.5}],
-    selection : dict={"fun":tournament_selection,"kwargs":{"tournament_size":8}},
+    selection : dict={"fun":tournament_selection_with_elitism,"kwargs":{"tournament_size":8}},
     # termination criteria
     max_evals : int=None,
     max_gens : int=100,
@@ -152,6 +152,10 @@ class Evolution:
     self.num_evals = 0
     self.start_time, self.elapsed_time = 0, 0
     self.best_of_gens = list()
+    self.best_fitness = list()
+    self.average_of_gens = list()
+    self.diversity_of_fitness = list()
+    self.diversity_of_population = list()
 
     self.memory = None
 
@@ -201,11 +205,21 @@ class Evolution:
 
     for i in range(self.pop_size):
       self.population[i].fitness = fitnesses[i]
-    # store eval cost
-    self.num_evals += self.pop_size
-    # store best at initialization
-    best = self.population[np.argmax([t.fitness for t in self.population])]
-    self.best_of_gens.append(deepcopy(best))
+      # store eval cost
+      self.num_evals += self.pop_size
+      # store best at initialization
+      fitness_list = [t.fitness for t in self.population]
+      best = self.population[np.argmax(fitness_list)]
+      self.best_of_gens.append(deepcopy(best))
+      average = np.mean(fitness_list)
+      variation = np.std(fitness_list)
+      diversity_gen = compute_all_pairwise_distance(self.population)
+
+      self.diversity_of_population.append(diversity_gen)
+      self.best_of_gens.append(deepcopy(best))
+      self.best_fitness.append(best.fitness)
+      self.average_of_gens.append(average)
+      self.diversity_of_fitness.append(variation)
 
   def _perform_generation(self):
     """
@@ -276,8 +290,17 @@ class Evolution:
     self.population = offspring_population
     # update info
     self.num_gens += 1
-    best = self.population[np.argmax([t.fitness for t in self.population])]
+    fitness_list = [t.fitness for t in self.population]
+    best = self.population[np.argmax(fitness_list)]
+    average = np.mean(fitness_list)
+    variation = np.std(fitness_list)
+    diversity_gen = compute_all_pairwise_distance(self.population)
+
+    self.diversity_of_population.append(diversity_gen)
     self.best_of_gens.append(deepcopy(best))
+    self.best_fitness.append(best.fitness)
+    self.average_of_gens.append(average)
+    self.diversity_of_fitness.append(variation)
 
   def _optimize(self, individual, steps):
     Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
