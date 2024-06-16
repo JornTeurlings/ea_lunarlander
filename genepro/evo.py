@@ -206,20 +206,20 @@ class Evolution:
     for i in range(self.pop_size):
       self.population[i].fitness = fitnesses[i]
       # store eval cost
-      self.num_evals += self.pop_size
-      # store best at initialization
-      fitness_list = [t.fitness for t in self.population]
-      best = self.population[np.argmax(fitness_list)]
-      self.best_of_gens.append(deepcopy(best))
-      average = np.mean(fitness_list)
-      variation = np.std(fitness_list)
-      diversity_gen = compute_all_pairwise_distance(self.population)
+    self.num_evals += self.pop_size
+    # store best at initialization
+    fitness_list = [t.fitness for t in self.population]
+    best = self.population[np.argmax(fitness_list)]
+    self.best_of_gens.append(deepcopy(best))
+    average = np.mean(fitness_list)
+    variation = np.std(fitness_list)
+    diversity_gen = compute_all_pairwise_distance(self.population)
 
-      self.diversity_of_population.append(diversity_gen)
-      self.best_of_gens.append(deepcopy(best))
-      self.best_fitness.append(best.fitness)
-      self.average_of_gens.append(average)
-      self.diversity_of_fitness.append(variation)
+    self.diversity_of_population.append(diversity_gen)
+    self.best_of_gens.append(deepcopy(best))
+    self.best_fitness.append(best.fitness)
+    self.average_of_gens.append(average)
+    self.diversity_of_fitness.append(variation)
 
   def _perform_generation(self):
     """
